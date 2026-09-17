@@ -10,6 +10,9 @@ if (!isset($_SESSION['userID']) || $_SESSION['role'] != 'Customer') {
 $userID = $_SESSION['userID'];
 $message = "";
 
+// Auto-process expired no-shows (strictly skips Checked-In, In-House, and advance-paid bookings)
+processExpiredBookingsAndNoShows($pdo);
+
 // Function to validate date format (YYYY-MM-DD)
 function isValidDate($dateString) {
     $d = DateTime::createFromFormat('Y-m-d', $dateString);
@@ -29,38 +32,55 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['book_room'])) {
     } elseif (strtotime($checkIn) >= strtotime($checkOut)) {
         $message = "Error: Check-out date must be after check-in date.";
     } else {
-        $otp = rand(100000, 999999);
+        // Fetch room info to validate expected total and partial advance payment
+        $rStmt = $pdo->prepare("SELECT price, roomType, status FROM rooms WHERE roomID = ?");
+        $rStmt->execute([$roomID]);
+        $roomInfo = $rStmt->fetch();
 
-        // Calculate dueTime from current database timestamp to guarantee it is always in the future
-        $dbNow = $pdo->query("SELECT NOW()")->fetchColumn();
-        $nowTimestamp = $dbNow ? strtotime($dbNow) : time();
+        $nights = max(1, (int)round((strtotime($checkOut) - strtotime($checkIn)) / 86400));
+        $roomPrice = (float)($roomInfo['price'] ?? 0.00);
+        $totalExpectedAmount = $nights * $roomPrice;
+        $paidAmount = floatval($paidAmount);
 
-        // Cut-off at end of check-in day (23:59:59)
-        $checkInCutoff = strtotime($checkIn . ' 23:59:59');
+        if ($paidAmount <= 0) {
+            $message = "Error: Payment amount must be greater than zero.";
+        } elseif ($paidAmount > $totalExpectedAmount) {
+            $message = "Error: Payment amount (LKR " . number_format($paidAmount, 2) . ") cannot exceed total expected room cost (LKR " . number_format($totalExpectedAmount, 2) . ").";
+        } else {
+            $otp = rand(100000, 999999);
 
-        // Minimum holding window from current booking time (at least 6 hours from now)
-        $minFutureWindow = strtotime('+6 hours', $nowTimestamp);
+            // Calculate dueTime from current database timestamp
+            $dbNow = $pdo->query("SELECT NOW()")->fetchColumn();
+            $nowTimestamp = $dbNow ? strtotime($dbNow) : time();
 
-        // Pick whichever is further in the future: ensures dueTime is never in the past
-        $dueTimestamp = max($checkInCutoff, $minFutureWindow);
-        $dueTime = date('Y-m-d H:i:s', $dueTimestamp);
+            // When a valid partial advance payment (e.g. LKR 20,000 out of LKR 28,000) or full payment is made,
+            // the reservation is secured with advance funds. The remaining balance is due at checkout.
+            // Therefore, dueTime extends until the end of the stay (checkOutDate) so it never triggers 'Past Due'
+            // or premature auto-cancellation.
+            $dueTimestamp = max(strtotime($checkOut . ' 23:59:59'), strtotime('+24 hours', $nowTimestamp));
+            $dueTime = date('Y-m-d H:i:s', $dueTimestamp);
 
-        try {
-            $stmt = $pdo->prepare("CALL sp_CreateBooking(?, ?, ?, ?, ?, ?, ?, ?, @b_id, @msg)");
-            $stmt->execute([$userID, $roomID, $checkIn, $checkOut, $otp, $dueTime, $agreePolicy, $paidAmount]);
-            
-            $out = $pdo->query("SELECT @b_id AS bookingID, @msg AS statusMessage")->fetch();
-            $stmt->closeCursor();
-            
-            if ($out['bookingID'] > 0) {
-                $nights = (int)round((strtotime($checkOut) - strtotime($checkIn)) / 86400);
-                $nightsText = $nights . ($nights === 1 ? ' night' : ' nights');
-                $message = "Booking Successful! Booking ID: <b>#" . $out['bookingID'] . "</b> | Stay: <b>$nightsText</b> | Paid Advance: <b>LKR " . number_format((float)$paidAmount, 2) . "</b> | QR Code / Check-in OTP: <b class='text-blue-700 text-base tracking-wider'>$otp</b> (Due Time: $dueTime)";
-            } else {
-                $message = "Error: " . $out['statusMessage'];
+            try {
+                $stmt = $pdo->prepare("CALL sp_CreateBooking(?, ?, ?, ?, ?, ?, ?, ?, @b_id, @msg)");
+                $stmt->execute([$userID, $roomID, $checkIn, $checkOut, $otp, $dueTime, $agreePolicy, $paidAmount]);
+                
+                $out = $pdo->query("SELECT @b_id AS bookingID, @msg AS statusMessage")->fetch();
+                $stmt->closeCursor();
+                
+                if ($out['bookingID'] > 0) {
+                    $nightsText = $nights . ($nights === 1 ? ' night' : ' nights');
+                    $remaining = max(0.00, $totalExpectedAmount - $paidAmount);
+                    $paymentSummary = ($remaining > 0)
+                        ? "Paid Advance: <b>LKR " . number_format($paidAmount, 2) . "</b> (Balance Due at Checkout: <b>LKR " . number_format($remaining, 2) . "</b>)"
+                        : "Paid in Full: <b>LKR " . number_format($paidAmount, 2) . "</b>";
+
+                    $message = "Booking Successful! Booking ID: <b>#" . $out['bookingID'] . "</b> | Stay: <b>$nightsText</b> | $paymentSummary | QR Code / Check-in OTP: <b class='text-blue-700 text-base tracking-wider'>$otp</b>";
+                } else {
+                    $message = "Error: " . $out['statusMessage'];
+                }
+            } catch (PDOException $e) {
+                $message = "Error: " . $e->getMessage();
             }
-        } catch (PDOException $e) {
-            $message = "Error: " . $e->getMessage();
         }
     }
 }
@@ -209,7 +229,9 @@ $my_bookings = $stmt2->fetchAll();
                     <?php else: ?>
                         <?php foreach($my_bookings as $mb): 
                             $isConfirmed = (($mb['bookingStatus'] ?? '') == 'Confirmed');
+                            $isCheckedIn = in_array(($mb['bookingStatus'] ?? ''), ['Checked-In', 'In-House']);
                             $isPaid = (($mb['paymentStatus'] ?? '') == 'Paid');
+                            $isAdvance = (($mb['paymentStatus'] ?? '') == 'Advance Paid');
                         ?>
                         <tr class="hover:bg-slate-50/80 transition">
                             <td class="py-3.5 px-4 font-mono font-bold text-blue-600">
@@ -225,9 +247,19 @@ $my_bookings = $stmt2->fetchAll();
                             </td>
                             <td class="py-3.5 px-4">
                                 <div class="flex flex-col gap-1 items-start">
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold <?php echo $isConfirmed ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'; ?>">
-                                        <?php echo htmlspecialchars($mb['bookingStatus'] ?? 'Confirmed'); ?>
-                                    </span>
+                                    <?php if($isCheckedIn): ?>
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800">
+                                            <i class="fa-solid fa-hotel mr-1 text-[10px]"></i> Checked-In
+                                        </span>
+                                    <?php elseif($isConfirmed): ?>
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
+                                            Confirmed
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
+                                            <?php echo htmlspecialchars($mb['bookingStatus'] ?? ''); ?>
+                                        </span>
+                                    <?php endif; ?>
                                     <span class="text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded font-mono font-bold text-slate-800">
                                         OTP: <?php echo htmlspecialchars($mb['otp'] ?? 'N/A'); ?>
                                     </span>
@@ -236,13 +268,23 @@ $my_bookings = $stmt2->fetchAll();
                             <td class="py-3.5 px-4 text-xs space-y-0.5">
                                 <div>
                                     Status: 
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold <?php echo $isPaid ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'; ?>">
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold <?php echo $isPaid ? 'bg-emerald-100 text-emerald-800' : ($isAdvance ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'); ?>">
                                         <?php echo htmlspecialchars($mb['paymentStatus'] ?? 'Pending'); ?>
                                     </span>
                                 </div>
-                                <div class="text-slate-500">
-                                    Due: <b><?php echo htmlspecialchars($mb['dueTime'] ?? 'N/A'); ?></b>
-                                </div>
+                                <?php if($isCheckedIn): ?>
+                                    <div class="text-emerald-700 font-medium text-[11px]">
+                                        <i class="fa-solid fa-circle-check mr-1 text-[10px]"></i> In-House Guest
+                                    </div>
+                                <?php elseif($isAdvance): ?>
+                                    <div class="text-slate-500 text-[11px]">
+                                        Balance due at checkout
+                                    </div>
+                                <?php elseif(!$isPaid && !empty($mb['dueTime'])): ?>
+                                    <div class="text-slate-500 text-[11px]">
+                                        Due: <b><?php echo htmlspecialchars($mb['dueTime']); ?></b>
+                                    </div>
+                                <?php endif; ?>
                                 <?php if(!empty($mb['refundStatus']) && $mb['refundStatus'] != 'N/A'): ?>
                                     <div class="text-red-600 font-medium">
                                         Refund: <?php echo htmlspecialchars($mb['refundStatus']); ?>

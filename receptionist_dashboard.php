@@ -9,14 +9,10 @@ if (!isset($_SESSION['userID']) || $_SESSION['role'] != 'Receptionist') {
 
 $message = "";
 
-// Auto-process expired 'Confirmed' no-shows past their dueTime on page load/refresh
-try {
-    $procStmt = $pdo->query("CALL sp_ProcessNoShows(@msg)");
-    $procStmt->closeCursor();
-} catch (PDOException $e) {
-    // Fail-safe: allow dashboard to load even if procedure encounters an issue
-    error_log("Auto sp_ProcessNoShows error: " . $e->getMessage());
-}
+// Auto-process expired no-shows in the background
+// STRICT EXCLUSION: Completely skips and excludes bookings with 'Checked-In' or 'In-House' status,
+// and protects valid partial advance payments from auto-cancellation.
+processExpiredBookingsAndNoShows($pdo);
 
 // 1. Guest Check-In Verification (Physical ID Match or OTP)
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['checkin'])) {
@@ -155,7 +151,7 @@ try {
         FROM bookings b
         JOIN users u ON b.userID = u.userID
         JOIN rooms r ON b.roomID = r.roomID
-        WHERE b.bookingStatus = 'Checked-In'
+        WHERE b.bookingStatus IN ('Checked-In', 'In-House')
         ORDER BY b.bookingID DESC
     ");
     $stmt2->execute();
@@ -442,6 +438,7 @@ unset($stay);
                     <?php else: ?>
                         <?php foreach($active_stays as $stay): 
                             $hasBalance = ($stay['remainingBalance'] > 0);
+                            $isCheckedIn = in_array(($stay['bookingStatus'] ?? ''), ['Checked-In', 'In-House']);
                         ?>
                         <tr class="hover:bg-slate-50/80 transition">
                             <td class="py-3.5 px-4 font-mono font-bold text-blue-600">
@@ -476,12 +473,18 @@ unset($stay);
                             </td>
                             <td class="py-3.5 px-4 text-xs">
                                 <?php if($hasBalance): ?>
-                                    <div class="font-bold text-red-600 text-sm">
+                                    <div class="font-bold text-slate-900 text-sm">
                                         LKR <?php echo number_format($stay['remainingBalance'], 2); ?>
                                     </div>
-                                    <span class="inline-flex items-center gap-1 text-[11px] font-semibold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full mt-0.5">
-                                        <i class="fa-solid fa-clock"></i> Payment Due
-                                    </span>
+                                    <?php if(!$isCheckedIn): ?>
+                                        <span class="inline-flex items-center gap-1 text-[11px] font-semibold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full mt-0.5">
+                                            <i class="fa-solid fa-clock"></i> Payment Due
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="text-[11px] text-slate-500 block mt-0.5">
+                                            Payable at checkout
+                                        </span>
+                                    <?php endif; ?>
                                 <?php else: ?>
                                     <div class="font-bold text-emerald-700 text-sm">
                                         LKR 0.00
