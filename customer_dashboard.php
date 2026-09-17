@@ -40,7 +40,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['book_room'])) {
             $stmt->closeCursor();
             
             if ($out['bookingID'] > 0) {
-                $message = "Booking Successful! Booking ID: <b>#" . $out['bookingID'] . "</b> | QR Code / Check-in OTP: <b class='text-blue-700 text-base tracking-wider'>$otp</b> (Due Time: $dueTime)";
+                $nights = (int)round((strtotime($checkOut) - strtotime($checkIn)) / 86400);
+                $nightsText = $nights . ($nights === 1 ? ' night' : ' nights');
+                $message = "Booking Successful! Booking ID: <b>#" . $out['bookingID'] . "</b> | Stay: <b>$nightsText</b> | Paid Advance: <b>LKR " . number_format((float)$paidAmount, 2) . "</b> | QR Code / Check-in OTP: <b class='text-blue-700 text-base tracking-wider'>$otp</b> (Due Time: $dueTime)";
             } else {
                 $message = "Error: " . $out['statusMessage'];
             }
@@ -331,7 +333,7 @@ $my_bookings = $stmt2->fetchAll();
                                 <span class="text-xs text-slate-400 block">per night</span>
                             </td>
                             <td class="py-3.5 px-4 text-right">
-                                <form method="POST" class="inline-flex flex-wrap items-center justify-end gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                                <form method="POST" class="booking-form inline-flex flex-wrap items-center justify-end gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200" data-room-price="<?php echo htmlspecialchars($room['price']); ?>">
                                     <input type="hidden" name="roomID" value="<?php echo $room['roomID']; ?>">
                                     
                                     <div class="flex items-center gap-1">
@@ -350,6 +352,10 @@ $my_bookings = $stmt2->fetchAll();
                                         <span class="text-xs text-slate-500 font-medium">Advance:</span>
                                         <input type="number" name="paidAmount" step="0.01" placeholder="Amount" required 
                                                class="border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-700 bg-white w-24 focus:ring-1 focus:ring-blue-500">
+                                    </div>
+
+                                    <!-- Dynamically calculated expected total room price display -->
+                                    <div class="total-price-display hidden items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold shadow-xs cursor-pointer transition">
                                     </div>
 
                                     <label class="flex items-center gap-1 text-xs text-slate-600 cursor-pointer ml-1">
@@ -373,6 +379,115 @@ $my_bookings = $stmt2->fetchAll();
     </section>
 
 </main>
+
+<!-- Dynamic Room Price Calculation & Date Validation Script -->
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const today = new Date().toISOString().split('T')[0];
+
+    document.querySelectorAll('.booking-form').forEach(form => {
+        const inInput = form.querySelector('input[name="checkInDate"]');
+        const outInput = form.querySelector('input[name="checkOutDate"]');
+        const paidInput = form.querySelector('input[name="paidAmount"]');
+        const displayBadge = form.querySelector('.total-price-display');
+        const roomPrice = parseFloat(form.dataset.roomPrice) || 0;
+
+        if (inInput) inInput.min = today;
+        if (outInput) outInput.min = today;
+
+        // Detect if customer manually modified the advance amount
+        if (paidInput) {
+            paidInput.addEventListener('input', function () {
+                paidInput.dataset.manualEdit = 'true';
+            });
+        }
+
+        function calculateExpectedPrice() {
+            const inVal = inInput ? inInput.value : '';
+            const outVal = outInput ? outInput.value : '';
+
+            if (!inVal || !outVal) {
+                displayBadge.className = 'total-price-display hidden';
+                displayBadge.innerHTML = '';
+                return;
+            }
+
+            const inDate = new Date(inVal + 'T00:00:00');
+            const outDate = new Date(outVal + 'T00:00:00');
+            const diffDays = Math.round((outDate - inDate) / 86400000);
+
+            if (diffDays > 0) {
+                const totalPrice = diffDays * roomPrice;
+                const formattedPrice = totalPrice.toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                });
+                const nightsText = diffDays + (diffDays === 1 ? ' night' : ' nights');
+
+                displayBadge.className = 'total-price-display inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 border border-blue-200 text-blue-900 rounded-lg text-xs font-semibold shadow-xs cursor-pointer hover:bg-blue-100 transition';
+                displayBadge.title = 'Expected Total: LKR ' + formattedPrice + ' (' + nightsText + '). Click to auto-fill into Advance.';
+                displayBadge.innerHTML = `
+                    <i class="fa-solid fa-receipt text-blue-600"></i>
+                    <span>Total: <b class="text-blue-950">LKR ${formattedPrice}</b></span>
+                    <span class="text-[11px] font-medium text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded-full">(${nightsText})</span>
+                `;
+
+                // Automatically pre-fill the Advance field if it has not been customized manually
+                if (paidInput && (!paidInput.dataset.manualEdit || paidInput.value === '' || paidInput.dataset.autoVal === paidInput.value)) {
+                    paidInput.value = totalPrice.toFixed(2);
+                    paidInput.dataset.autoVal = totalPrice.toFixed(2);
+                }
+            } else {
+                displayBadge.className = 'total-price-display inline-flex items-center gap-1 px-2.5 py-1 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs font-semibold shadow-xs';
+                displayBadge.title = 'Check-out date must be after check-in date';
+                displayBadge.innerHTML = `
+                    <i class="fa-solid fa-circle-exclamation text-red-500"></i>
+                    <span>Check-out must be after check-in</span>
+                `;
+            }
+        }
+
+        // Clicking the Total badge copies full calculated price into Advance field
+        if (displayBadge) {
+            displayBadge.addEventListener('click', function () {
+                const inVal = inInput ? inInput.value : '';
+                const outVal = outInput ? outInput.value : '';
+                if (inVal && outVal) {
+                    const inDate = new Date(inVal + 'T00:00:00');
+                    const outDate = new Date(outVal + 'T00:00:00');
+                    const diffDays = Math.round((outDate - inDate) / 86400000);
+                    if (diffDays > 0 && paidInput) {
+                        const total = diffDays * roomPrice;
+                        paidInput.value = total.toFixed(2);
+                        paidInput.dataset.autoVal = total.toFixed(2);
+                        paidInput.focus();
+                    }
+                }
+            });
+        }
+
+        // Adjust min date of checkout and trigger calculation
+        if (inInput) {
+            inInput.addEventListener('change', function () {
+                if (inInput.value && outInput) {
+                    outInput.min = inInput.value;
+                    if (outInput.value && outInput.value <= inInput.value) {
+                        const nextDay = new Date(new Date(inInput.value + 'T00:00:00').getTime() + 86400000);
+                        outInput.value = nextDay.toISOString().split('T')[0];
+                    }
+                }
+                calculateExpectedPrice();
+            });
+            inInput.addEventListener('input', calculateExpectedPrice);
+        }
+
+        if (outInput) {
+            outInput.addEventListener('change', calculateExpectedPrice);
+            outInput.addEventListener('input', calculateExpectedPrice);
+        }
+    });
+});
+</script>
 
 </body>
 </html>
