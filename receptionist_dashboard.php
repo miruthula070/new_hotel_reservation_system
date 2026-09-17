@@ -9,6 +9,15 @@ if (!isset($_SESSION['userID']) || $_SESSION['role'] != 'Receptionist') {
 
 $message = "";
 
+// Auto-process expired 'Confirmed' no-shows past their dueTime on page load/refresh
+try {
+    $procStmt = $pdo->query("CALL sp_ProcessNoShows(@msg)");
+    $procStmt->closeCursor();
+} catch (PDOException $e) {
+    // Fail-safe: allow dashboard to load even if procedure encounters an issue
+    error_log("Auto sp_ProcessNoShows error: " . $e->getMessage());
+}
+
 // 1. Guest Check-In Verification (Physical ID Match or OTP)
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['checkin'])) {
     $bookingID = $_POST['bookingID'];

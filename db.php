@@ -1,4 +1,7 @@
 <?php
+// Set consistent timezone matching local server and MySQL
+date_default_timezone_set('Asia/Colombo');
+
 $host = '127.0.0.1';
 $user = 'root';
 $pass = '';

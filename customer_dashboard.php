@@ -30,7 +30,20 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['book_room'])) {
         $message = "Error: Check-out date must be after check-in date.";
     } else {
         $otp = rand(100000, 999999);
-        $dueTime = date('Y-m-d H:i:s', strtotime('+2 hours'));
+
+        // Calculate dueTime from current database timestamp to guarantee it is always in the future
+        $dbNow = $pdo->query("SELECT NOW()")->fetchColumn();
+        $nowTimestamp = $dbNow ? strtotime($dbNow) : time();
+
+        // Cut-off at end of check-in day (23:59:59)
+        $checkInCutoff = strtotime($checkIn . ' 23:59:59');
+
+        // Minimum holding window from current booking time (at least 6 hours from now)
+        $minFutureWindow = strtotime('+6 hours', $nowTimestamp);
+
+        // Pick whichever is further in the future: ensures dueTime is never in the past
+        $dueTimestamp = max($checkInCutoff, $minFutureWindow);
+        $dueTime = date('Y-m-d H:i:s', $dueTimestamp);
 
         try {
             $stmt = $pdo->prepare("CALL sp_CreateBooking(?, ?, ?, ?, ?, ?, ?, ?, @b_id, @msg)");
