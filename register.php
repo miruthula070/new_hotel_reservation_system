@@ -3,6 +3,9 @@ session_start();
 require 'db.php';
 
 $message = "";
+$name = "";
+$email = "";
+$role = "Customer";
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $name = trim($_POST['name'] ?? '');
@@ -12,6 +15,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
     if (empty($name) || empty($email) || empty($password)) {
         $message = "Please fill in all required fields.";
+    } elseif (strlen($password) < 6) {
+        $message = "Password must be at least 6 characters long.";
     } else {
         try {
             // Check if email already exists
@@ -77,7 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 <span class="absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
                     <i class="fa-regular fa-user"></i>
                 </span>
-                <input type="text" id="name" name="name" required placeholder="John Doe"
+                <input type="text" id="name" name="name" required placeholder="John Doe" value="<?php echo htmlspecialchars($name); ?>"
                        class="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition">
             </div>
         </div>
@@ -88,7 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 <span class="absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
                     <i class="fa-regular fa-envelope"></i>
                 </span>
-                <input type="email" id="email" name="email" required placeholder="john@example.com"
+                <input type="email" id="email" name="email" required placeholder="john@example.com" value="<?php echo htmlspecialchars($email); ?>"
                        class="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition">
             </div>
         </div>
@@ -102,6 +107,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 <input type="password" id="password" name="password" required placeholder="••••••••"
                        class="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition">
             </div>
+            <p class="text-xs text-slate-500 mt-1">Must be at least 6 characters long.</p>
         </div>
 
         <div>
@@ -112,8 +118,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 </span>
                 <select id="role" name="role"
                         class="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition">
-                    <option value="Customer">Customer</option>
-                    <option value="Receptionist">Receptionist</option>
+                    <option value="Customer" <?php echo ($role === 'Customer') ? 'selected' : ''; ?>>Customer</option>
+                    <option value="Receptionist" <?php echo ($role === 'Receptionist') ? 'selected' : ''; ?>>Receptionist</option>
                 </select>
             </div>
         </div>
