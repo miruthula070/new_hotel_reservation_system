@@ -17,3 +17,5 @@ An end-to-end Database Management System developed as part of the Database Syste
 1. Import the `luxury_hotel_db.sql` file into your local MySQL server (via phpMyAdmin).
 2. Configure your database connection in `db.php`.
 3. Run the project on a local server (like XAMPP).
+
+ https://drive.google.com/drive/folders/1QaoHDftAyVG-LejHe5oFPHXRsXRrCi6S?usp=sharing
